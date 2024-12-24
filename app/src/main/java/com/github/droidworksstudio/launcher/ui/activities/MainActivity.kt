@@ -146,6 +146,15 @@ class MainActivity : AppCompatActivity() {
                 Constants.REQUEST_LOCATION_PERMISSION_CODE
             )
         }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.READ_CALENDAR),
+                Constants.REQUEST_READ_CALENDAR
+            )
+        }
     }
 
     private fun requestLocationUpdates() {

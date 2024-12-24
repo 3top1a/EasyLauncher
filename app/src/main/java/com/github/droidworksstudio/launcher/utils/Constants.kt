@@ -99,6 +99,7 @@ object Constants {
 
     const val REQUEST_INSTALL_PERMISSION = 123
     const val REQUEST_LOCATION_PERMISSION_CODE = 234
+    const val REQUEST_READ_CALENDAR = 235
 
     const val FILTER_STRENGTH_MIN = 0
     const val FILTER_STRENGTH_MAX = 100

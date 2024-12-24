@@ -1,16 +1,21 @@
 package com.github.droidworksstudio.launcher.ui.home
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.CalendarContract
 import android.text.format.DateFormat
 import android.util.Log
 import android.view.Gravity
@@ -54,18 +59,27 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
 import javax.inject.Inject
 
+
+data class CalendarEvent(
+    val id: Long,
+    val title: String,
+    val start: Long,
+    val end: Long,
+    val description: String?,
+    val location: String?,
+    val allday: Int
+)
 
 /**
  * A simple [Fragment] subclass as the default destination in the navigation.
  */
 @AndroidEntryPoint
-class HomeFragment : Fragment(),
-    OnItemClickedListener.OnAppsClickedListener,
+class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
     OnItemClickedListener.OnAppLongClickedListener,
-    OnItemClickedListener.BottomSheetDismissListener,
-    OnItemClickedListener.OnAppStateClickListener,
+    OnItemClickedListener.BottomSheetDismissListener, OnItemClickedListener.OnAppStateClickListener,
     BiometricHelper.Callback, ScrollEventListener {
 
     private var _binding: FragmentHomeBinding? = null
@@ -87,6 +101,7 @@ class HomeFragment : Fragment(),
     private val homeAdapter: HomeAdapter by lazy { HomeAdapter(this, this, preferenceHelper) }
 
     private lateinit var batteryReceiver: BroadcastReceiver
+    private lateinit var calendarReceiver: BroadcastReceiver
     private lateinit var biometricPrompt: BiometricPrompt
 
     private lateinit var context: Context
@@ -108,6 +123,7 @@ class HomeFragment : Fragment(),
 
         initializeInjectedDependencies()
         setupBattery()
+        setupCalendar()
         setupRecyclerView()
         observeSwipeTouchListener()
         observeUserInterfaceSettings()
@@ -124,6 +140,107 @@ class HomeFragment : Fragment(),
         preferenceViewModel.setShowDailyWord(preferenceHelper.showDailyWord)
     }
 
+    private fun getClosestCalendarEvent(context: Context): CalendarEvent? {
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_CALENDAR
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return null
+        }
+
+        val currentTime = System.currentTimeMillis()
+
+        val projection = arrayOf(
+            CalendarContract.Instances.EVENT_ID,
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Instances.DESCRIPTION,
+            CalendarContract.Instances.EVENT_LOCATION,
+            CalendarContract.Instances.CALENDAR_ID,
+            CalendarContract.Instances.ALL_DAY,
+        )
+
+        val builder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(builder, currentTime)
+        ContentUris.appendId(builder, currentTime + (7 * 24 * 60 * 60 * 1000))
+
+        val selection = "${CalendarContract.Instances.BEGIN} >= ?"
+
+        val selectionArgs = arrayOf(currentTime.toString())
+        val sortOrder = "${CalendarContract.Instances.BEGIN} ASC LIMIT 1"
+
+        try {
+            context.contentResolver.query(
+                builder.build(), projection, selection, selectionArgs, sortOrder
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    return CalendarEvent(
+                        id = cursor.getLong(cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID)),
+                        title = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)),
+                        start = cursor.getLong(cursor.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)),
+                        end = cursor.getLong(cursor.getColumnIndexOrThrow(CalendarContract.Instances.END)),
+                        description = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.DESCRIPTION)),
+                        location = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_LOCATION)),
+                        allday = cursor.getInt(cursor.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)),
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return null
+    }
+
+    private fun setupCalendar() {
+        binding.calendar.setOnClickListener {
+            try {
+                // Try to open calendar app
+                val calendarIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_APP_CALENDAR)
+                }
+                startActivity(calendarIntent)
+            } catch (e: ActivityNotFoundException) {
+                // Fallback: try to open system calendar provider
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("content://com.android.calendar/time")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                } catch (e2: ActivityNotFoundException) {
+                    // If both attempts fail, show an error message
+                    context.showLongToast("No calendar app found")
+                }
+            }
+        }
+
+        binding.calendar.setOnLongClickListener {
+//            CalendarSelectionDialog().show(parentFragmentManager, "calendar_selection")
+            true
+        }
+
+        calendarReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val cal = getClosestCalendarEvent(context)
+                if (cal != null) {
+                    val sdf = if (cal.allday == 1) {
+                        SimpleDateFormat("dd. MM.")
+                    } else {
+                        SimpleDateFormat("dd. MM. HH:mm")
+                    }
+                    val date = java.util.Date(cal.start)
+                    val str = sdf.format(date)
+                    _binding?.calendar?.text = "${str}: ${cal.title}"
+                }
+            }
+        }
+
+        val batteryIntentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        requireActivity().registerReceiver(calendarReceiver, batteryIntentFilter)
+    }
+
     private fun setupBattery() {
         batteryReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
@@ -134,37 +251,37 @@ class HomeFragment : Fragment(),
                 val batteryTextView: AppCompatTextView = binding.battery
 
                 val batteryLevel = level * 100 / scale.toFloat()
-
-                val batteryDrawable = when {
-                    batteryLevel >= 76 -> ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.app_battery100
-                    )
-
-                    batteryLevel >= 51 -> ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.app_battery75
-                    )
-
-                    batteryLevel >= 26 -> ContextCompat.getDrawable(
-                        requireContext(),
-                        R.drawable.app_battery50
-                    )
-
-                    else -> ContextCompat.getDrawable(requireContext(), R.drawable.app_battery25)
-                }
-
-                batteryDrawable?.let {
-                    // Resize the drawable to match the text size
-                    val textSize = batteryTextView.textSize.toInt()
-                    if (preferenceHelper.showBattery) {
-                        it.setBounds(0, 0, textSize, textSize)
-                        batteryTextView.setCompoundDrawables(it, null, null, null)
-                    } else {
-                        it.setBounds(0, 0, 0, 0)
-                        batteryTextView.setCompoundDrawables(null, null, null, null)
-                    }
-                }
+//
+//                val batteryDrawable = when {
+//                    batteryLevel >= 76 -> ContextCompat.getDrawable(
+//                        requireContext(),
+//                        R.drawable.app_battery100
+//                    )
+//
+//                    batteryLevel >= 51 -> ContextCompat.getDrawable(
+//                        requireContext(),
+//                        R.drawable.app_battery75
+//                    )
+//
+//                    batteryLevel >= 26 -> ContextCompat.getDrawable(
+//                        requireContext(),
+//                        R.drawable.app_battery50
+//                    )
+//
+//                    else -> ContextCompat.getDrawable(requireContext(), R.drawable.app_battery25)
+//                }
+//
+//                batteryDrawable?.let {
+//                    // Resize the drawable to match the text size
+//                    val textSize = batteryTextView.textSize.toInt()
+//                    if (preferenceHelper.showBattery) {
+//                        it.setBounds(0, 0, textSize, textSize)
+//                        batteryTextView.setCompoundDrawables(it, null, null, null)
+//                    } else {
+//                        it.setBounds(0, 0, 0, 0)
+//                        batteryTextView.setCompoundDrawables(null, null, null, null)
+//                    }
+//                }
 
                 val batteryLevelText = getString(R.string.battery_level, batteryLevel.toString())
                 binding.battery.text = batteryLevelText
@@ -181,24 +298,19 @@ class HomeFragment : Fragment(),
         // Ensure correct type for layout params
         val layoutParams = (binding.appListAdapter.layoutParams as? LinearLayout.LayoutParams)
             ?: LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
 
         // Determine the gravity and margin based on the alignment preference
-        val gravity = if (preferenceHelper.homeAlignmentBottom)
-            Gravity.BOTTOM
-        else
-            Gravity.TOP
+        val gravity = if (preferenceHelper.homeAlignmentBottom) Gravity.BOTTOM
+        else Gravity.TOP
 
         // Apply the margin and gravity
         binding.appListTouchArea.gravity = gravity
 
         // Set the appropriate margin based on the alignment
-        if (preferenceHelper.homeAlignmentBottom)
-            layoutParams.bottomMargin = marginInPixels.toInt()
-        else
-            layoutParams.topMargin = marginInPixels.toInt()
+        if (preferenceHelper.homeAlignmentBottom) layoutParams.bottomMargin = marginInPixels.toInt()
+        else layoutParams.topMargin = marginInPixels.toInt()
 
 
         // Set gravity to align RecyclerView to the bottom
@@ -223,8 +335,7 @@ class HomeFragment : Fragment(),
     private fun observeFavoriteAppList() {
         viewModel.compareInstalledAppInfo()
 
-        @Suppress("DEPRECATION")
-        viewLifecycleOwner.lifecycleScope.launchWhenCreated {
+        @Suppress("DEPRECATION") viewLifecycleOwner.lifecycleScope.launchWhenCreated {
             viewModel.favoriteApps.flowOn(Dispatchers.Main).collect {
                 homeAdapter.submitList(it)
                 homeAdapter.updateDataWithStateFlow(it)
@@ -322,10 +433,8 @@ class HomeFragment : Fragment(),
     }
 
     private fun observeBioAuthCheck(appInfo: AppInfo) {
-        if (!appInfo.lock)
-            context.launchApp(appInfo)
-        else
-            fingerHelper.startBiometricAuth(appInfo, this)
+        if (!appInfo.lock) context.launchApp(appInfo)
+        else fingerHelper.startBiometricAuth(appInfo, this)
     }
 
     private fun showSelectedApp(appInfo: AppInfo) {
@@ -430,41 +539,32 @@ class HomeFragment : Fragment(),
             }
 
             Constants.Action.ShowAppList -> {
-                val actionTypeNavOptions: NavOptions? =
-                    if (preferenceHelper.disableAnimations) null
-                    else appHelper.getActionType(actionType)
+                val actionTypeNavOptions: NavOptions? = if (preferenceHelper.disableAnimations) null
+                else appHelper.getActionType(actionType)
                 Handler(Looper.getMainLooper()).post {
                     findNavController().navigate(
-                        R.id.DrawFragment,
-                        null,
-                        actionTypeNavOptions
+                        R.id.DrawFragment, null, actionTypeNavOptions
                     )
                 }
             }
 
 
             Constants.Action.ShowFavoriteList -> {
-                val actionTypeNavOptions: NavOptions? =
-                    if (preferenceHelper.disableAnimations) null
-                    else appHelper.getActionType(actionType)
+                val actionTypeNavOptions: NavOptions? = if (preferenceHelper.disableAnimations) null
+                else appHelper.getActionType(actionType)
                 Handler(Looper.getMainLooper()).post {
                     findNavController().navigate(
-                        R.id.FavoriteFragment,
-                        null,
-                        actionTypeNavOptions
+                        R.id.FavoriteFragment, null, actionTypeNavOptions
                     )
                 }
             }
 
             Constants.Action.ShowHiddenList -> {
-                val actionTypeNavOptions: NavOptions? =
-                    if (preferenceHelper.disableAnimations) null
-                    else appHelper.getActionType(actionType)
+                val actionTypeNavOptions: NavOptions? = if (preferenceHelper.disableAnimations) null
+                else appHelper.getActionType(actionType)
                 Handler(Looper.getMainLooper()).post {
                     findNavController().navigate(
-                        R.id.HiddenFragment,
-                        null,
-                        actionTypeNavOptions
+                        R.id.HiddenFragment, null, actionTypeNavOptions
                     )
                 }
             }
@@ -483,14 +583,11 @@ class HomeFragment : Fragment(),
             }
 
             Constants.Action.ShowWidgets -> {
-                val actionTypeNavOptions: NavOptions? =
-                    if (preferenceHelper.disableAnimations) null
-                    else appHelper.getActionType(actionType)
+                val actionTypeNavOptions: NavOptions? = if (preferenceHelper.disableAnimations) null
+                else appHelper.getActionType(actionType)
                 Handler(Looper.getMainLooper()).post {
                     findNavController().navigate(
-                        R.id.WidgetsFragment,
-                        null,
-                        actionTypeNavOptions
+                        R.id.WidgetsFragment, null, actionTypeNavOptions
                     )
                 }
             }
@@ -529,8 +626,7 @@ class HomeFragment : Fragment(),
 
                             else -> requireContext().showLongToast(
                                 getString(R.string.authentication_error).format(
-                                    errString,
-                                    errorCode
+                                    errString, errorCode
                                 )
                             )
                         }
@@ -541,9 +637,7 @@ class HomeFragment : Fragment(),
                             if (preferenceHelper.disableAnimations) null
                             else appHelper.getActionType(Constants.Swipe.DoubleTap)
                         findNavController().navigate(
-                            R.id.SettingsFragment,
-                            null,
-                            actionTypeNavOptions
+                            R.id.SettingsFragment, null, actionTypeNavOptions
                         )
                     }
 
@@ -555,13 +649,10 @@ class HomeFragment : Fragment(),
             if (preferenceHelper.settingsLock) {
                 fingerHelper.startBiometricSettingsAuth(R.id.SettingsFragment)
             } else {
-                val actionTypeNavOptions: NavOptions? =
-                    if (preferenceHelper.disableAnimations) null
-                    else appHelper.getActionType(Constants.Swipe.DoubleTap)
+                val actionTypeNavOptions: NavOptions? = if (preferenceHelper.disableAnimations) null
+                else appHelper.getActionType(Constants.Swipe.DoubleTap)
                 findNavController().navigate(
-                    R.id.SettingsFragment,
-                    null,
-                    actionTypeNavOptions
+                    R.id.SettingsFragment, null, actionTypeNavOptions
                 )
             }
         }
@@ -613,8 +704,7 @@ class HomeFragment : Fragment(),
 
             else -> requireContext().showLongToast(
                 getString(R.string.authentication_error).format(
-                    errorMessage,
-                    errorCode
+                    errorMessage, errorCode
                 )
             )
         }
