@@ -16,8 +16,9 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        manifestPlaceholders += mapOf()
         applicationId = "app.easy.launcher"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
         versionCode = 33
         versionName = "0.3.3"

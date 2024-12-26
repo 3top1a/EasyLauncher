@@ -223,22 +223,34 @@ class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
 
         calendarReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                val cal = getClosestCalendarEvent(context)
-                if (cal != null) {
-                    val sdf = if (cal.allday == 1) {
-                        SimpleDateFormat("dd. MM.")
-                    } else {
-                        SimpleDateFormat("dd. MM. HH:mm")
-                    }
-                    val date = java.util.Date(cal.start)
-                    val str = sdf.format(date)
-                    _binding?.calendar?.text = "${str}: ${cal.title}"
-                }
+                updateCalendarEvent()
             }
         }
 
-        val batteryIntentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        requireActivity().registerReceiver(calendarReceiver, batteryIntentFilter)
+        // Register for calendar-specific events
+        val calendarIntentFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_PROVIDER_CHANGED)
+            addAction(CalendarContract.ACTION_EVENT_REMINDER)
+            addAction(CalendarContract.EXTRA_CUSTOM_APP_URI)
+            // You might want to add more calendar-related actions based on your needs
+        }
+        requireActivity().registerReceiver(calendarReceiver, calendarIntentFilter,
+            Context.RECEIVER_NOT_EXPORTED)
+        updateCalendarEvent()
+    }
+
+    private fun updateCalendarEvent() {
+        val cal = getClosestCalendarEvent(requireContext())
+        if (cal != null) {
+            val sdf = if (cal.allday == 1) {
+                SimpleDateFormat("dd. MM.")
+            } else {
+                SimpleDateFormat("dd. MM. HH:mm")
+            }
+            val date = java.util.Date(cal.start)
+            val str = sdf.format(date)
+            binding.calendar.text = "${str} ${cal.title}"
+        }
     }
 
     private fun setupBattery() {
