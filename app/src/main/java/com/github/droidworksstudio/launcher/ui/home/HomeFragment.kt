@@ -140,7 +140,7 @@ class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
         preferenceViewModel.setShowDailyWord(preferenceHelper.showDailyWord)
     }
 
-    private fun getClosestCalendarEvent(context: Context): CalendarEvent? {
+    private fun getClosestCalendarEvents(context: Context): List<CalendarEvent>? {
         if (ContextCompat.checkSelfPermission(
                 context, Manifest.permission.READ_CALENDAR
             ) != PackageManager.PERMISSION_GRANTED
@@ -168,14 +168,18 @@ class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
         val selection = "${CalendarContract.Instances.BEGIN} >= ?"
 
         val selectionArgs = arrayOf(currentTime.toString())
-        val sortOrder = "${CalendarContract.Instances.BEGIN} ASC LIMIT 1"
+        val sortOrder = "${CalendarContract.Instances.BEGIN} ASC LIMIT 3"
 
         try {
+            val events = mutableListOf<CalendarEvent>()
+
+            var counter = 0
+
             context.contentResolver.query(
                 builder.build(), projection, selection, selectionArgs, sortOrder
             )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    return CalendarEvent(
+                while (cursor.moveToNext() && counter <= 3) {
+                    events.add(CalendarEvent(
                         id = cursor.getLong(cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID)),
                         title = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)),
                         start = cursor.getLong(cursor.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)),
@@ -183,9 +187,13 @@ class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
                         description = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.DESCRIPTION)),
                         location = cursor.getString(cursor.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_LOCATION)),
                         allday = cursor.getInt(cursor.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)),
-                    )
+                    ))
+
+                    counter += 1
                 }
             }
+
+            return events
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -239,17 +247,24 @@ class HomeFragment : Fragment(), OnItemClickedListener.OnAppsClickedListener,
         updateCalendarEvent()
     }
 
+    private fun EventToText(event: CalendarEvent): String {
+        val sdf = if (event.allday == 1) {
+            SimpleDateFormat("dd. MM.")
+        } else {
+            SimpleDateFormat("dd. MM. HH:mm")
+        }
+        val date = java.util.Date(event.start)
+        val str = sdf.format(date)
+        return "$str ${event.title}"
+    }
+
     private fun updateCalendarEvent() {
-        val cal = getClosestCalendarEvent(requireContext())
-        if (cal != null) {
-            val sdf = if (cal.allday == 1) {
-                SimpleDateFormat("dd. MM.")
-            } else {
-                SimpleDateFormat("dd. MM. HH:mm")
-            }
-            val date = java.util.Date(cal.start)
-            val str = sdf.format(date)
-            binding.calendar.text = "${str} ${cal.title}"
+        val events = getClosestCalendarEvents(requireContext())
+        if (events != null) {
+            val texts = events.map { EventToText(it) }
+            val str = texts.joinToString("\n")
+
+            binding.calendar.text = str
         }
     }
 
